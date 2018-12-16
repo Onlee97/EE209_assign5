@@ -30,6 +30,8 @@ int synLine(DynArray_T token_list);
 int execute(DynArray_T token_list, int pipe_num);
 void SigQuitHandler(int sig);
 
+int SigQuitPressed = 0;
+
 int main() {
 	int file_opened = 1;
 	FILE *file;
@@ -45,41 +47,41 @@ int main() {
 
 
 	sigset_t mask_all, mask_one, prev_one;
-    sigfillset(&mask_all);
-    sigemptyset(&mask_one);
-    sigaddset(&mask_one, SIGINT);
+	sigfillset(&mask_all);
+	sigemptyset(&mask_one);
+	sigaddset(&mask_one, SIGINT);
     sigprocmask(SIG_BLOCK, &mask_one, &prev_one); // Block SIGCHLD
 
-	while (1) {
-		char cmdline[MAXLINE];
+    while (1) {
+    	char cmdline[MAXLINE];
         // Read command line if file is not found//
-		if (file_opened) {	
-			if ((fgets(cmdline, MAXLINE, file) == NULL) && ferror(file))
-				fprintf(stderr, "fgets error");
-			else if (feof(file)) {
-				fflush(stdout);
-				file_opened = 0;
-			}
-			else {
-				printf("%% %s", cmdline);
-				fflush(stdout);
-				eval(cmdline);
-			}
-		}
-		else {
-			printf("%% ");
-			fflush(stdout);
-			if ((fgets(cmdline, MAXLINE, stdin) == NULL) && ferror(stdin))
-				fprintf(stderr, "fgets error");
-        	else if (feof(stdin)) { // End of file (ctrl-d)
-        		fflush(stdout);
-        		exit(0);
-        	}
-        	else {
-        		eval(cmdline);
-        	}
-        }
-        fflush(stdout);
+    	if (file_opened) {	
+    		if (fgets(cmdline, MAXLINE, file) == NULL){ 
+    			fflush(stdout);
+    			wait(NULL);
+    			file_opened = 0;
+    		}
+    		else {
+    			printf("%% %s", cmdline);
+    			fflush(stdout);
+    			eval(cmdline);
+    			wait(NULL);
+    		}
+    	}
+    	else {
+    		printf("%% ");
+    		fflush(stdout);
+    		if (fgets(cmdline, MAXLINE, stdin) == NULL) {
+    			fflush(stdout);
+    			wait(NULL);
+    			exit(0);
+    		}
+    		else {
+    			eval(cmdline);
+    		}
+    	}
+    	fflush(stdout);
+    	wait(NULL);
     }
     exit(0); /* control never reaches here */
 }
@@ -119,54 +121,56 @@ int execute(DynArray_T token_list, int pipe_num)
 	int len = DynArray_getLength(token_list);
 	DynArray_toArray(token_list, (void **)argv); // Copy token to list
 	int pid;
-	//DynArray_map(token_list, printToken, NULL);
+	DynArray_map(token_list, printToken, NULL);
+	printf("\n");
 
-	if (argv[0] = NULL) //Ignore Empty cmd
+	if (argv[0] == NULL) //Ignore Empty cmd
 		return 1;
 
-	int pi[pipe_num + 1];
+	if (strcmp(argv[0], "exit") == 0)
+		exit(0);
+
+	if (strcmp(argv[0], "cd") == 0) {
+		printf("CD\n");
+		char buf[MAXLINE];
+		char *gdir = getcwd(buf, sizeof(buf));
+		char *dir = strcat(gdir, "/");
+		char *to = strcat(dir, argv[1]);
+
+		chdir(to);
+	}
+
+
+	int pi[pipe_num + 1]; //Divide large process to smaller process which will be piped together
 	int j = 0;
 	pi[j++] = 0;
 	for (int i = 0; i < DynArray_getLength(token_list); i++){
 		if (argv[i] == NULL)
 			pi[j++] = i+1;
-		else
-			printf("%s ", argv[i]);
 	}
-/*	for (int i = 0; i < pipe_num + 1; i++){
-		printf("%d\n", pi[i]);
-		printf("process start: %s\n", argv[pi[i]]);
-		printf("%d ", pi[i]);
-	}*/
-	printf("start: %s\n", argv[0]);
-	printf("\n");
-	/*
-	for (int i = 0; i < pipe_num + 1; i++) {
-		printf("Process start at: %s ", argv[pi[i]]);
-		printf("\n");
-	}*/
 
 	sigset_t empty_mask;
 	sigemptyset(&empty_mask);
-	fflush(NULL);
-    if ((pid = fork()) == 0) { // Run child process
-    	sigprocmask(SIG_SETMASK, &empty_mask, NULL); // Unblock SIGINT
-    	if (execvp(argv[0], argv) < 0) {
-    		printf("%s: Command not found.\n", argv[0]);
-    		exit(0);
+	for (int i = 0; i < pipe_num + 1; i++) {
+		fflush(NULL);
+    	if ((pid = fork()) == 0) { // Run child process
+    		sigprocmask(SIG_SETMASK, &empty_mask, NULL); // Unblock SIGINT
+    		if (execvp(argv[pi[i]], argv+pi[i]) < 0) {
+    			printf("%s: Command not found.\n", argv[0]);
+    			exit(0);
+    		}
     	}
+    	pid = wait(NULL);
     }
-    pid = wait(NULL);
-    //sigprocmask(SIG_SETMASK, &prev_one, NULL); // Unblock SIGCHLD 
-    //DynArray_free(token_list);
 }
 
 /* Syntaxically analyze the array of token. Return number of pipe if 
    successful, or -1 (FALSE) otherwise. Change the pipe token to NULL
    to indicate end of a process
 
-/* synLine() uses a DFA approach.  It "reads" its characters from
-   token_list. */
+   synLine() uses a DFA approach.  It "reads" its characters from
+   token_list. 
+*/
 int synLine(DynArray_T token_list)
 {	
 	char *argv[MAXARGS]; // Hold a local copy of token list, also used to traverse through the list
@@ -348,8 +352,15 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 
 void SigQuitHandler(int sig)
 {
-	printf("Quit\n");
-	exit(0);
+	printf("Hello\n");
+	if (SigQuitPressed == 1)
+		exit(0);
+	else if (SigQuitPressed == 0) {
+		SigQuitPressed = 1;
+		printf("Press Ctrl-\\ again within 5 second to quit\n");
+	}
+	sleep(5);
+	SigQuitPressed = 0;
 }
 
 
