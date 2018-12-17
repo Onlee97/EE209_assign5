@@ -1,3 +1,8 @@
+/*
+	EE209 Assignment 5: unix Shell
+	Duy Le - 20186466
+*/
+
 #include "dynarray.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -29,22 +34,27 @@ char * makeToken(char *tokenValue);
 int synLine(DynArray_T token_list);
 int execute(DynArray_T token_list, int pipe_num);
 void SigQuitHandler(int sig);
+void SigAlarmHandler(int sig);
 
 int SigQuitPressed = 0;
+char *exe_file;
 
-int main() {
+int main(int argc, char **name) {
+	exe_file = malloc(32*sizeof(char*));
+	strcpy(exe_file, name[0]);
+	
 	int file_opened = 1;
 	FILE *file;
 	//if ((file = fopen("/mnt/home/20186466/assign5/.ishrc","r")) == NULL) {
-	//if ((file = fopen("/mnt/home/20186466/.ishrc","r")) == NULL) {
-	if ((file = fopen("/home/duyle/Desktop/Duy/EE209/assign5/.ishrc","r")) == NULL) {
+	if ((file = fopen("/mnt/home/20186466/.ishrc","r")) == NULL) {
+	//if ((file = fopen("/home/duyle/Desktop/Duy/EE209/assign5/.ishrc","r")) == NULL) {
 		file_opened = 0;
 		perror("Could not open .ishrc file\n");
 	}
 
 	//Initialize signal handler
 	signal(SIGQUIT, SigQuitHandler);
-
+	signal(SIGALRM, SigAlarmHandler);
 
 	sigset_t mask_all, mask_one, prev_one;
 	sigfillset(&mask_all);
@@ -83,6 +93,7 @@ int main() {
     	fflush(stdout);
     	wait(NULL);
     }
+    free(exe_file);
     exit(0); /* control never reaches here */
 }
 
@@ -93,7 +104,7 @@ void eval(char *cmdline) {
 	token_list = DynArray_new(0);
 	if (token_list == NULL)
 	{
-		fprintf(stderr, "Cannot allocate memory\n");
+		fprintf(stderr, "%s: Cannot allocate memory\n", exe_file);
 		exit(EXIT_FAILURE);
 	}
 	if (!lexLine(cmdline, token_list))
@@ -114,39 +125,86 @@ void eval(char *cmdline) {
 
 	DynArray_free(token_list);
 }
-
+/*
+	Execute token list, return 1 if successful, 0 otherwise
+	Check and Execute built in command: cd, exit, setenv, unsetenv
+	Pipe 
+*/
 int execute(DynArray_T token_list, int pipe_num) 
 {
 	char *argv[MAXARGS]; // Hold a local copy of token list, also used to traverse through the list
 	int len = DynArray_getLength(token_list);
 	DynArray_toArray(token_list, (void **)argv); // Copy token to list
 	int pid;
-	DynArray_map(token_list, printToken, NULL);
-	printf("\n");
+	/*DynArray_map(token_list, printToken, NULL);
+	printf("\n");*/
 
 	if (argv[0] == NULL) //Ignore Empty cmd
 		return 1;
 
+	//Check if exit command
 	if (strcmp(argv[0], "exit") == 0)
 		exit(0);
 
+	//Check if cd command 
 	if (strcmp(argv[0], "cd") == 0) {
-		printf("CD\n");
 		char buf[MAXLINE];
 		char *gdir = getcwd(buf, sizeof(buf));
 		char *dir = strcat(gdir, "/");
-		char *to = strcat(dir, argv[1]);
-
-		chdir(to);
+		char *to;
+		if (len <= 2) {
+			return 1;
+		}
+		else {
+			to = strcat(dir, argv[1]);
+			chdir(to);
+			return 1;
+		}
 	}
 
+	//Check if setenv command
+	if (strcmp(argv[0],"setenv") == 0){
+		if (len <= 2) {
+			fprintf(stderr,"%s: setenv takes one or two parameters\n", exe_file);
+			return 0;
+		}
+		else if (len <= 3) {
+			setenv(argv[1], "", 0);
+			return 1;
+		}
+		else {
+			setenv(argv[1], argv[2], 0);
+			return 1;
+		}
 
-	int pi[pipe_num + 1]; //Divide large process to smaller process which will be piped together
+	}
+
+	//Check if setenv command
+	if (strcmp(argv[0],"unsetenv") == 0){
+		if (len <= 2) {
+			fprintf(stderr,"%s: unsetenv takes one parameters\n", exe_file);
+			return 0;
+		}
+		else {
+			unsetenv(argv[1]);
+			return 1;
+		}
+
+	}
+	//Divide large process to smaller process which will be piped together
+	int pi[pipe_num + 1]; 
 	int j = 0;
 	pi[j++] = 0;
-	for (int i = 0; i < DynArray_getLength(token_list); i++){
+	for (int i = 0; i < len; i++){
 		if (argv[i] == NULL)
 			pi[j++] = i+1;
+	}
+	//Initialize pipe
+	int fds[2];
+	if (pipe_num >= 1){
+		if (pipe(fds) < 0)
+			fprintf(stderr, "%s Pipe failed\n", exe_file);
+		return 0;
 	}
 
 	sigset_t empty_mask;
@@ -155,8 +213,28 @@ int execute(DynArray_T token_list, int pipe_num)
 		fflush(NULL);
     	if ((pid = fork()) == 0) { // Run child process
     		sigprocmask(SIG_SETMASK, &empty_mask, NULL); // Unblock SIGINT
+    		
+/*    		//Link pipe if there is pipe
+    		if (pipe_num >= 1){
+
+    			//If first process
+    			if (i == 0){
+    				//close(fds[0]);
+    				dup2(fds[1], 1); //stdout
+    				//close(fds[1]);
+    			} 
+
+    			else {
+    				//close(fds[1]);
+    				dup2(fds[0], 0); //stdin
+    				//close(fds[0]);
+    			}
+    			close(fds[0]);
+    			close(fds[1]);
+    		}
+*/
     		if (execvp(argv[pi[i]], argv+pi[i]) < 0) {
-    			printf("%s: Command not found.\n", argv[0]);
+    			fprintf(stderr, "%s: %s: Command not found.\n", exe_file, argv[0]);
     			exit(0);
     		}
     	}
@@ -216,13 +294,13 @@ int synLine(DynArray_T token_list)
 
 			case STATE_PIPE:
 			if (argv[i] == NULL) {
-				fprintf(stderr, "Pipe or redirection destination not specified\n");
+				fprintf(stderr, "%s: Pipe or redirection destination not specified\n", exe_file);
 				return -1;
 			}
 				//Pipe special character is saved as "space+|" in token to distingush from pipe
 				//character within ""
 			else if (strcmp(argv[i]," |") == 0) {
-				fprintf(stderr, "Pipe or redirection destination not specified\n");
+				fprintf(stderr, "%s: Pipe or redirection destination not specified\n", exe_file);
 				return -1;
 			}
 			else if (*argv[i]) {
@@ -280,14 +358,14 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 				char *token = makeToken(" |"); 
 				if (! DynArray_add(token_list, token))
 				{
-					fprintf(stderr, "Cannot allocate memory\n");
+					fprintf(stderr, "%s: Cannot allocate memory\n", exe_file);
 					return 0;
 				}
 			}
 			else if (is_dquote(c))
 				eState = STATE_QUOTE;
 			else {
-				fprintf(stderr, "Invalid line\n");
+				fprintf(stderr, "%s: Invalid line\n", exe_file);
 				return 0;
 			}
 			break;
@@ -298,7 +376,7 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 				char *token = makeToken(value);
 				if (! DynArray_add(token_list, token))
 				{	
-					fprintf(stderr, "Cannot allocate memory\n");
+					fprintf(stderr, "%s: Cannot allocate memory\n", exe_file);
 					return 0;
 				}
 				iTokenIndex = 0;
@@ -309,7 +387,7 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 					char *token = makeToken(" |");
 					if (! DynArray_add(token_list, token))
 					{
-						fprintf(stderr, "Cannot allocate memory\n");
+						fprintf(stderr, "%s: Cannot allocate memory\n", exe_file);
 						return 0;
 					}
 				}
@@ -325,14 +403,14 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 				value[iTokenIndex++] = c;
 			}
 			else {
-				fprintf(stderr, "Invalid line\n");
+				fprintf(stderr, "%s: Invalid line\n", exe_file);
 				return 0;
 			}
 			break;
 
 			case STATE_QUOTE:
 			if (is_newline(c)) {
-				fprintf(stderr, "ERROR - unmatched quote");
+				fprintf(stderr, "%s: ERROR - unmatched quote", exe_file);
 			}
 			else if (is_dquote(c)) {
 				eState = STATE_CHAR;
@@ -341,7 +419,7 @@ static int lexLine(const char *cmdline, DynArray_T token_list)
 				value[iTokenIndex++] = c;
 			}
 			else {
-				fprintf(stderr, "Invalid line\n");
+				fprintf(stderr, "%s: Invalid line\n", exe_file);
 				return 0;
 			}
 			break;
@@ -358,8 +436,12 @@ void SigQuitHandler(int sig)
 	else if (SigQuitPressed == 0) {
 		SigQuitPressed = 1;
 		printf("Press Ctrl-\\ again within 5 second to quit\n");
+		alarm(5);
 	}
-	sleep(5);
+}
+
+void SigAlarmHandler(int sig)
+{
 	SigQuitPressed = 0;
 }
 
